@@ -34,7 +34,7 @@ from tqdm.auto import tqdm
 from transformers import AutoTokenizer, CLIPTextModel
 
 
-from config import parse_args
+from dmd.config import parse_args
 
 logger = get_logger(__name__)
 
