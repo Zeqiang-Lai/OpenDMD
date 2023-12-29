@@ -27,18 +27,32 @@ def encode_prompt(captions, text_encoder, tokenizer):
     return prompt_embeds
 
 
+def generate_cfg(unet, scheduler, latents, prompt_embeds, negative_prompt_embeds, num_inference_steps=1, guidance_scale=7.5):
+    scheduler.set_timesteps(num_inference_steps, device=unet.device)
+    timesteps = scheduler.timesteps
+
+    prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+
+    for i, t in enumerate(timesteps):
+        # expand the latents if we are doing classifier free guidance
+        latent_model_input = torch.cat([latents] * 2)
+        # predict the noise residual
+        noise_pred = unet(latent_model_input, t, encoder_hidden_states=prompt_embeds).sample
+
+        # perform guidance
+        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+        # compute the previous noisy sample x_t -> x_t-1
+        latents = scheduler.step(noise_pred, t, latents).sample
+
+    return latents
+
+
 def generate(unet, scheduler, latents, prompt_embeds):
-    bsz = latents.shape[0]
-    timesteps = torch.full((bsz,), scheduler.config.num_train_timesteps-1, device=latents.device)
-    timesteps = timesteps.long()
-
-    noise_pred = unet(
-        latents,
-        timesteps,
-        encoder_hidden_states=prompt_embeds,
-    ).sample
-
-    latents = eps_to_mu(scheduler, noise_pred, latents, timesteps)
+    t = torch.full((1,), scheduler.config.num_train_timesteps-1, device=latents.device).long()
+    noise_pred = unet(latents, t, encoder_hidden_states=prompt_embeds).sample
+    latents = eps_to_mu(scheduler, noise_pred, latents, t)
     return latents
 
 
