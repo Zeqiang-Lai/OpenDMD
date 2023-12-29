@@ -234,6 +234,8 @@ def setup_dataloader(args):
 
 def main(args):
     accelerator, logging_dir = setup_training(args)
+    file_handler = logging.FileHandler(os.path.join(logging_dir, "dmd.log"))
+    logger.logger.addHandler(file_handler)
 
     # 10. Handle mixed precision and device placement
     # For mixed precision training we cast all non-trainable weigths to half-precision
@@ -442,13 +444,9 @@ def main(args):
 
     # Create the pipeline using using the trained modules and save it.
     accelerator.wait_for_everyone()
-    # if accelerator.is_main_process:
-    #     unet = accelerator.unwrap_model(unet)
-    #     unet.save_pretrained(os.path.join(args.output_dir, "unet"))
-
-    #     target_unet = accelerator.unwrap_model(target_unet)
-    #     target_unet.save_pretrained(os.path.join(args.output_dir, "unet_target"))
-
+    if accelerator.is_main_process:
+        student_unet = accelerator.unwrap_model(student_unet)
+        student_unet.save_pretrained(os.path.join(args.output_dir, "student_unet"))
     accelerator.end_training()
 
 
