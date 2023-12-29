@@ -38,7 +38,7 @@ def generate(unet, scheduler, latents, prompt_embeds):
         encoder_hidden_states=prompt_embeds,
     ).sample
 
-    latents = eps_to_mu(scheduler, noise_pred, latents, torch.ones_like(timesteps))
+    latents = eps_to_mu(scheduler, noise_pred, latents, timesteps)
     return latents
 
 

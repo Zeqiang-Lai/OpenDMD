@@ -120,7 +120,9 @@ def add_training_args(parser):
         help="Total number of training steps to perform.",
     )
     parser.add_argument("--validation_steps", type=int, default=200, help="Run validation every X steps.")
-
+    parser.add_argument(
+        "--validation_prompt", type=str, default=None, help="A prompt that is sampled during training for inference."
+    )
     # ----------Accelerate Arguments----------
     parser.add_argument(
         "--tracker_project_name",
@@ -165,6 +167,10 @@ def add_advanced_training_args(parser):
         "--kl_loss_weight",
         type=float,
         default=1.0,
+    )
+    parser.add_argument(
+        "--train_fake_unet",
+        action="store_true",
     )
 
 
@@ -216,7 +222,8 @@ def add_dataloader_args(parser):
         default=0,
         help=("Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."),
     )
-    parser.add_argument("--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader.")
+    parser.add_argument("--dm_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader.")
+    parser.add_argument("--reg_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader.")
 
 
 def parse_args():

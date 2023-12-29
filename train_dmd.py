@@ -37,6 +37,31 @@ from dmd.model import (
 logger = get_logger(__name__)
 
 
+class MetricTracker:
+    def __init__(self, n):
+        self.n = n
+        self.data = 1
+
+    def update(self, **kwargs):
+        for key, value in kwargs.items():
+            if key not in self.data:
+                self.data[key] = []
+            self.data[key].append(value)
+            if len(self.data[key]) > self.n:
+                self.data[key].pop(0)
+
+    def mean(self, key=None):
+        if key is None:
+            means = {}
+            for key, values in self.data.items():
+                means[key] = sum(values) / len(values)
+            return means
+        values = self.data.get(key, [])
+        if not values:
+            return None
+        return sum(values) / len(values)
+
+
 def setup_training(args):
     logging_dir = Path(args.output_dir, args.logging_dir)
 
@@ -196,15 +221,15 @@ def setup_optimizer_scheduler(args, fake_unet, student_unet):
 def setup_dataloader(args):
     dataset = TextDataset()
     dm_dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=args.train_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True
+        dataset, batch_size=args.dm_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True
     )
     dataset = RegressionDataset()
-    ode_dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=args.train_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True
+    reg_dataloader = torch.utils.data.DataLoader(
+        dataset, batch_size=args.reg_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True
     )
     dm_dataloader = cycle(dm_dataloader)
-    ode_dataloader = cycle(ode_dataloader)
-    return dm_dataloader, ode_dataloader
+    reg_dataloader = cycle(reg_dataloader)
+    return dm_dataloader, reg_dataloader
 
 
 def main(args):
@@ -224,7 +249,7 @@ def main(args):
 
     setup_model_saving(accelerator, student_unet)
 
-    dm_dataloader, ode_dataloader = setup_dataloader(args)
+    dm_dataloader, reg_dataloader = setup_dataloader(args)
 
     fake_optimizer, student_optimizer, fake_lr_scheduler, student_lr_scheduler = setup_optimizer_scheduler(args, fake_unet, student_unet)
 
@@ -232,9 +257,9 @@ def main(args):
     (fake_unet, student_unet,
      fake_optimizer, student_optimizer,
      fake_lr_scheduler, student_lr_scheduler,
-     dm_dataloader, ode_dataloader) = accelerator.prepare(
+     dm_dataloader, reg_dataloader) = accelerator.prepare(
          fake_unet, student_unet, fake_optimizer, student_optimizer,
-         fake_lr_scheduler, student_lr_scheduler, dm_dataloader, ode_dataloader
+         fake_lr_scheduler, student_lr_scheduler, dm_dataloader, reg_dataloader
     )
 
     # Train!
@@ -267,38 +292,44 @@ def main(args):
             global_step = int(path.split("-")[1])
 
     lpips = piq.LPIPS()
+    tracker = MetricTracker(50)
 
     for step in range(args.max_train_steps):
         prompts = next(dm_dataloader)
-        latents_ref, images_ref, prompts_ref = next(ode_dataloader)
+        latents_ref, images_ref, prompts_ref = next(reg_dataloader)
         latents_ref = latents_ref.to(accelerator.device)
         images_ref = images_ref.to(accelerator.device)
 
         if args.gradient_checkpointing:
             accelerator.unwrap_model(fake_unet).disable_gradient_checkpointing()
 
+        logs = {}
         # ------------ train student unet ------------- #
 
-        prompt_embeds = encode_prompt(prompts, text_encoder, tokenizer)
-        latents = prepare_latents(accelerator.unwrap_model(student_unet), vae, batch_size=len(prompts), device=accelerator.device, dtype=weight_dtype)
-        latents_pred = generate(student_unet, noise_scheduler, latents, prompt_embeds)
+        loss_g = 0
 
-        prompt_ref_embeds = encode_prompt(prompts_ref, text_encoder, tokenizer)
-        latents_ref_pred = generate(student_unet, noise_scheduler, latents_ref, prompt_ref_embeds)
+        if args.reg_loss_weight > 0:
+            prompt_ref_embeds = encode_prompt(prompts_ref, text_encoder, tokenizer)
+            latents_ref_pred = generate(student_unet, noise_scheduler, latents_ref, prompt_ref_embeds)
+            images_ref_pred = vae.decode(latents_ref_pred.to(vae.dtype) / vae.config.scaling_factor).sample
+            images_ref_pred = (images_ref_pred / 2 + 0.5).clamp(0, 1)
+            images_ref_pred = images_ref_pred.to(dtype=images_ref.dtype)
+            loss_reg = lpips(images_ref, images_ref_pred)
+            loss_g += loss_reg * args.reg_loss_weight
 
-        latents_pred_cat = torch.cat([latents_pred, latents_ref_pred], dim=0)
-        prompt_embeds = torch.cat([prompt_embeds, prompt_ref_embeds], dim=0)
-        negative_prompt_embeds = encode_prompt([""]*len(prompts+prompts_ref), text_encoder, tokenizer)
-        loss_kl = distribution_matching_loss(real_unet, fake_unet, noise_scheduler,
-                                             latents_pred_cat, prompt_embeds, negative_prompt_embeds, args)
+        if args.kl_loss_weight > 0:
+            prompt_embeds = encode_prompt(prompts, text_encoder, tokenizer)
+            latents = prepare_latents(accelerator.unwrap_model(student_unet), vae, batch_size=len(prompts), device=accelerator.device, dtype=weight_dtype)
+            latents_pred = generate(student_unet, noise_scheduler, latents, prompt_embeds)
 
-        images_ref_pred = vae.decode(latents_ref_pred.to(vae.dtype) / vae.config.scaling_factor).sample
-        images_ref_pred = (images_ref_pred / 2 + 0.5).clamp(0, 1)
-        images_ref_pred = images_ref_pred.to(dtype=images_ref.dtype)
+            if args.reg_loss_weight > 0:
+                latents_pred = torch.cat([latents_pred, latents_ref_pred], dim=0)
+            prompt_embeds = torch.cat([prompt_embeds, prompt_ref_embeds], dim=0)
+            negative_prompt_embeds = encode_prompt([""]*len(prompts+prompts_ref), text_encoder, tokenizer)
+            loss_kl = distribution_matching_loss(real_unet, fake_unet, noise_scheduler,
+                                                 latents_pred, prompt_embeds, negative_prompt_embeds, args)
 
-        loss_reg = lpips(images_ref, images_ref_pred)
-
-        loss_g = loss_kl*args.kl_loss_weight + loss_reg * args.reg_loss_weight
+            loss_g += loss_kl*args.kl_loss_weight
 
         accelerator.backward(loss_g)
         if accelerator.sync_gradients:
@@ -307,57 +338,64 @@ def main(args):
         student_lr_scheduler.step()
         student_optimizer.zero_grad(set_to_none=True)
 
+        logs.update({'loss_g': loss_g.detach().item()})
+        tracker.update({'loss_g': loss_g.detach().item()})
+
         # ------------ train fake unet ------------- #
-        if args.gradient_checkpointing:
-            accelerator.unwrap_model(fake_unet).disable_gradient_checkpointing()
+        if args.train_fake_unet:
+            if args.gradient_checkpointing:
+                accelerator.unwrap_model(fake_unet).disable_gradient_checkpointing()
 
-        latents = stopgrad(latents_pred_cat)
-        # Get the text embedding for conditioning
-        encoder_hidden_states = stopgrad(prompt_embeds)
+            latents = stopgrad(latents_pred)
+            # Get the text embedding for conditioning
+            encoder_hidden_states = stopgrad(prompt_embeds)
 
-        # Sample noise that we'll add to the latents
-        noise = torch.randn_like(latents)
-        bsz = latents.shape[0]
-        # Sample a random timestep for each image
-        timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
-        timesteps = timesteps.long()
+            # Sample noise that we'll add to the latents
+            noise = torch.randn_like(latents)
+            bsz = latents.shape[0]
+            # Sample a random timestep for each image
+            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
+            timesteps = timesteps.long()
 
-        noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
+            noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
-        if noise_scheduler.config.prediction_type == "epsilon":
-            target = noise
-        elif noise_scheduler.config.prediction_type == "v_prediction":
-            target = noise_scheduler.get_velocity(latents, noise, timesteps)
-        else:
-            raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+            if noise_scheduler.config.prediction_type == "epsilon":
+                target = noise
+            elif noise_scheduler.config.prediction_type == "v_prediction":
+                target = noise_scheduler.get_velocity(latents, noise, timesteps)
+            else:
+                raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-        # Predict the noise residual and compute loss
-        model_pred = fake_unet(noisy_latents, timesteps, encoder_hidden_states).sample
+            # Predict the noise residual and compute loss
+            model_pred = fake_unet(noisy_latents, timesteps, encoder_hidden_states).sample
 
-        if args.snr_gamma is None:
-            loss_d = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-        else:
-            # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
-            # Since we predict the noise instead of x_0, the original formulation is slightly changed.
-            # This is discussed in Section 4.2 of the same paper.
-            snr = compute_snr(noise_scheduler, timesteps)
-            if noise_scheduler.config.prediction_type == "v_prediction":
-                # Velocity objective requires that we add one to SNR values before we divide by them.
-                snr = snr + 1
-            mse_loss_weights = (
-                torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
-            )
+            if args.snr_gamma is None:
+                loss_d = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+            else:
+                # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
+                # Since we predict the noise instead of x_0, the original formulation is slightly changed.
+                # This is discussed in Section 4.2 of the same paper.
+                snr = compute_snr(noise_scheduler, timesteps)
+                if noise_scheduler.config.prediction_type == "v_prediction":
+                    # Velocity objective requires that we add one to SNR values before we divide by them.
+                    snr = snr + 1
+                mse_loss_weights = (
+                    torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
+                )
 
-            loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
-            loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
-            loss_d = loss.mean()
+                loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
+                loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
+                loss_d = loss.mean()
 
-        accelerator.backward(loss_d)
-        if accelerator.sync_gradients:
-            accelerator.clip_grad_norm_(fake_unet.parameters(), args.max_grad_norm)
-        fake_optimizer.step()
-        fake_lr_scheduler.step()
-        fake_optimizer.zero_grad()
+            accelerator.backward(loss_d)
+            if accelerator.sync_gradients:
+                accelerator.clip_grad_norm_(fake_unet.parameters(), args.max_grad_norm)
+            fake_optimizer.step()
+            fake_lr_scheduler.step()
+            fake_optimizer.zero_grad()
+
+            logs.update({'loss_g': loss_d.detach().item()})
+            tracker.update({'loss_g': loss_d.detach().item()})
 
         # Checks if the accelerator has performed an optimization step behind the scenes
         if accelerator.sync_gradients:
@@ -390,10 +428,11 @@ def main(args):
                 if global_step % args.validation_steps == 0:
                     log_validation(vae, student_unet, text_encoder, tokenizer, noise_scheduler, args, accelerator, weight_dtype, global_step, logging_dir)
 
-        logs = {"loss_g": loss_g.detach().item(), "loss_d": loss_d.detach().item()}
         accelerator.log(logs, step=global_step)
-        logs.update({'step': global_step})
-        logger.info(logs)
+
+        print_logs = {'gstep': global_step}
+        print_logs.update(tracker.mean())
+        logger.info(print_logs)
 
         if global_step >= args.max_train_steps:
             break
@@ -420,26 +459,19 @@ def log_validation(vae, unet, text_encoder, tokenizer, noise_scheduler, args, ac
     else:
         generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
 
-    validation_prompts = [
-        "portrait photo of a girl, photograph, highly detailed face, depth of field, moody light, golden hour, style by Dan Winters, Russell James, Steve McCurry, centered, extremely detailed, Nikon D850, award winning photography",
-        "Self-portrait oil painting, a beautiful cyborg with golden hair, 8k",
-        "Astronaut in a jungle, cold color palette, muted colors, detailed, 8k",
-        "A photo of beautiful mountain with realistic sunset and blue lake, highly detailed, masterpiece",
-    ]
-
     image_dir = os.path.join(logging_dir, 'images')
     os.makedirs(image_dir, exist_ok=True)
-    for _, prompt in enumerate(validation_prompts):
-        with torch.cuda.amp.autocast():
-            latents = prepare_latents(accelerator.unwrap_model(unet), vae, batch_size=1, device=accelerator.device, dtype=weight_dtype, generator=generator)
-            prompt_embeds = encode_prompt(prompt, text_encoder, tokenizer)
-            latents_pred = generate(unet, noise_scheduler, latents, prompt_embeds)
-            images = vae.decode(latents_pred / vae.config.scaling_factor).sample
-            images = (images / 2 + 0.5).clamp(0, 1)
 
-            images = images[0].permute(1, 2, 0).detach().cpu().numpy()
-            images = (images*255).astype('uint8')
-            Image.fromarray(images).save(os.path.join(image_dir, f'{step}_{prompt}.jpg'))
+    with torch.cuda.amp.autocast():
+        latents = prepare_latents(accelerator.unwrap_model(unet), vae, batch_size=1, device=accelerator.device, dtype=weight_dtype, generator=generator)
+        prompt_embeds = encode_prompt(args.validation_prompt, text_encoder, tokenizer)
+        latents_pred = generate(unet, noise_scheduler, latents, prompt_embeds)
+        images = vae.decode(latents_pred / vae.config.scaling_factor).sample
+        images = (images / 2 + 0.5).clamp(0, 1)
+
+        images = images[0].permute(1, 2, 0).detach().cpu().numpy()
+        images = (images*255).astype('uint8')
+        Image.fromarray(images).save(os.path.join(image_dir, f'{step}_{args.validation_prompt}.jpg'))
 
 
 if __name__ == "__main__":
