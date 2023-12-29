@@ -40,9 +40,9 @@ logger = get_logger(__name__)
 class MetricTracker:
     def __init__(self, n):
         self.n = n
-        self.data = 1
+        self.data = {}
 
-    def update(self, **kwargs):
+    def update(self, kwargs):
         for key, value in kwargs.items():
             if key not in self.data:
                 self.data[key] = []
@@ -263,11 +263,14 @@ def main(args):
     )
 
     # Train!
-    total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+    total_reg_batch_size = args.reg_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+    total_dm_batch_size = args.dm_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     logger.info("***** Running training *****")
-    logger.info(f"  Instantaneous batch size per device = {args.train_batch_size}")
-    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
+    logger.info(f"  Instantaneous batch size per device (reg) = {args.reg_batch_size}")
+    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) (reg) = {total_reg_batch_size}")
+    logger.info(f"  Instantaneous batch size per device (reg) = {args.dm_batch_size}")
+    logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) (reg) = {total_dm_batch_size}")
     logger.info(f"  Gradient Accumulation steps = {args.gradient_accumulation_steps}")
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
     global_step = 0
