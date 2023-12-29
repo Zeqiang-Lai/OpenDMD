@@ -1,0 +1,21 @@
+python -m torch.distributed.launch --use_env --nodes=1 --nproc_per_node=8 train_dmd.py \
+    --pretrained_teacher_model runwayml/stable-diffusion-v1-5 \
+    --pretrained_vae_model_name_or_path madebyollin/taesd \
+    --mixed_precision=fp16 \
+    --dm_batch_size 4 \ 
+    --reg_batch_size 2 \ 
+    --max_train_steps=100000 \
+    --validation_steps=100 \
+    --gradient_accumulation_steps=1 \
+    --kL_loss_weight=1.0 \
+    --reg_loss_weight=0.25 \
+    --train_fake_unet \
+    --learning_rate=1e-5 \
+    --gradient_checkpointing
+    --output_dir="saved/dmd"\
+    --dataLoader_num_workers=81
+    --checkpointing_steps=1000 --checkpoints_total_limit=3 \
+    --resume_from_checkpoint=latest \
+    --report_to=tensorboard \ 
+    --seed=453645634 \
+    --validation_prompt="a blue dog"

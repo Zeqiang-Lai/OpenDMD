@@ -4,10 +4,17 @@ Unofficial Implementation of [One-step Diffusion with Distribution Matching Dist
 
 ## Usage
 
-### Build Regression Dataset
+- Build Regression Dataset
 
+```bash
+python build_regression_data.py
+```
 
-### Train 
+- Train 
+
+```bash
+bash train.sh
+```
 
 
 ## Citation
