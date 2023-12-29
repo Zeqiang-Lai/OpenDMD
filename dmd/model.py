@@ -62,17 +62,17 @@ def distribution_matching_loss(real_unet, fake_unet, noise_scheduler,
     noise = torch.randn_like(latents)
     noisy_latents = noise_scheduler.add_noise(latents, noise, timestep)
 
-    encoded_text = {'prompt_embeds': prompt_embeds}
     with torch.no_grad():
         noise_pred = fake_unet(
-            noisy_latents, timestep, encoder_hidden_states=prompt_embeds.float(), added_cond_kwargs=encoded_text,
+            noisy_latents, timestep, encoder_hidden_states=prompt_embeds.float()
         ).sample
         pred_fake_latents = eps_to_mu(noise_scheduler, noise_pred, noisy_latents, timestep)
 
         noisy_latents_input = torch.cat([noisy_latents] * 2)
+        timestep_input = torch.cat([timestep] * 2)
         prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
         noise_pred = real_unet(
-            noisy_latents_input, timestep, encoder_hidden_states=prompt_embeds.float(), added_cond_kwargs=encoded_text,
+            noisy_latents_input, timestep_input, encoder_hidden_states=prompt_embeds.float()
         ).sample
         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + args.guidance_scale * (noise_pred_text - noise_pred_uncond)

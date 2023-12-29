@@ -16,20 +16,6 @@ def add_model_checkpoint_args(parser):
         default=None,
         help="Path to pretrained VAE model with better numerical stability. More details: https://github.com/huggingface/diffusers/pull/4038.",
     )
-    parser.add_argument(
-        "--teacher_revision",
-        type=str,
-        default=None,
-        required=False,
-        help="Revision of pretrained LDM teacher model identifier from huggingface.co/models.",
-    )
-    parser.add_argument(
-        "--revision",
-        type=str,
-        default=None,
-        required=False,
-        help="Revision of pretrained LDM model identifier from huggingface.co/models.",
-    )
     # ... (add other model checkpoint args)
 
 
@@ -130,7 +116,7 @@ def add_training_args(parser):
     parser.add_argument(
         "--max_train_steps",
         type=int,
-        default=None,
+        default=1000,
         help="Total number of training steps to perform.",
     )
     parser.add_argument("--validation_steps", type=int, default=200, help="Run validation every X steps.")
@@ -146,13 +132,39 @@ def add_training_args(parser):
         ),
     )
 
-def add_advanced_training_args(parser)
+
+def add_advanced_training_args(parser):
     parser.add_argument(
         "--snr_gamma",
         type=float,
         default=None,
         help="SNR weighting gamma to be used if rebalancing the loss. Recommended value is 5.0. "
         "More details here: https://arxiv.org/abs/2303.09556.",
+    )
+    parser.add_argument(
+        "--min_dm_step_ratio",
+        type=float,
+        default=0.02,
+    )
+    parser.add_argument(
+        "--max_dm_step_ratio",
+        type=float,
+        default=0.98,
+    )
+    parser.add_argument(
+        "--guidance_scale",
+        type=float,
+        default=7.5,
+    )
+    parser.add_argument(
+        "--reg_loss_weight",
+        type=float,
+        default=0.25,
+    )
+    parser.add_argument(
+        "--kl_loss_weight",
+        type=float,
+        default=1.0,
     )
 
 

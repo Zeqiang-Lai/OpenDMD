@@ -1,4 +1,3 @@
-import gc
 import logging
 import os
 import shutil
@@ -6,7 +5,6 @@ from pathlib import Path
 
 import accelerate
 import diffusers
-import numpy as np
 import piq
 import torch
 import torch.nn.functional as F
@@ -17,17 +15,15 @@ from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from diffusers import (
-    AutoencoderKL,
     DDPMScheduler,
-    LCMScheduler,
-    StableDiffusionPipeline,
     UNet2DConditionModel,
+    AutoencoderTiny,
 )
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import compute_snr
 from packaging import version
-from transformers import AutoTokenizer, CLIPTextModel
-
+from transformers import AutoTokenizer, CLIPTextModel, BertModel
+from PIL import Image
 from dmd.args import parse_args
 from dmd.data import cycle, TextDataset, RegressionDataset
 from dmd.model import (
@@ -39,82 +35,6 @@ from dmd.model import (
 )
 
 logger = get_logger(__name__)
-
-
-def log_validation(vae, unet, args, accelerator, weight_dtype, step, name="target"):
-    logger.info("Running validation... ")
-
-    unet = accelerator.unwrap_model(unet)
-    pipeline = StableDiffusionPipeline.from_pretrained(
-        args.pretrained_teacher_model,
-        vae=vae,
-        unet=unet,
-        scheduler=LCMScheduler.from_pretrained(args.pretrained_teacher_model, subfolder="scheduler"),
-        revision=args.revision,
-        torch_dtype=weight_dtype,
-    )
-    pipeline = pipeline.to(accelerator.device)
-    pipeline.set_progress_bar_config(disable=True)
-
-    if args.enable_xformers_memory_efficient_attention:
-        pipeline.enable_xformers_memory_efficient_attention()
-
-    if args.seed is None:
-        generator = None
-    else:
-        generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
-
-    validation_prompts = [
-        "portrait photo of a girl, photograph, highly detailed face, depth of field, moody light, golden hour, style by Dan Winters, Russell James, Steve McCurry, centered, extremely detailed, Nikon D850, award winning photography",
-        "Self-portrait oil painting, a beautiful cyborg with golden hair, 8k",
-        "Astronaut in a jungle, cold color palette, muted colors, detailed, 8k",
-        "A photo of beautiful mountain with realistic sunset and blue lake, highly detailed, masterpiece",
-    ]
-
-    image_logs = []
-
-    for _, prompt in enumerate(validation_prompts):
-        images = []
-        with torch.autocast("cuda"):
-            images = pipeline(
-                prompt=prompt,
-                num_inference_steps=4,
-                num_images_per_prompt=4,
-                generator=generator,
-            ).images
-        image_logs.append({"validation_prompt": prompt, "images": images})
-
-    for tracker in accelerator.trackers:
-        if tracker.name == "tensorboard":
-            for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                formatted_images = []
-                for image in images:
-                    formatted_images.append(np.asarray(image))
-
-                formatted_images = np.stack(formatted_images)
-
-                tracker.writer.add_images(validation_prompt, formatted_images, step, dataformats="NHWC")
-        elif tracker.name == "wandb":
-            formatted_images = []
-
-            for log in image_logs:
-                images = log["images"]
-                validation_prompt = log["validation_prompt"]
-                for image in images:
-                    image = wandb.Image(image, caption=validation_prompt)
-                    formatted_images.append(image)
-
-            tracker.log({f"validation/{name}": formatted_images})
-        else:
-            logger.warn(f"image logging not implemented for {tracker.name}")
-
-        del pipeline
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        return image_logs
 
 
 def setup_training(args):
@@ -168,11 +88,11 @@ def setup_training(args):
 
 
 def setup_model(args, accelerator, weight_dtype):
-    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_teacher_model, subfolder="scheduler", revision=args.teacher_revision)
-    tokenizer = AutoTokenizer.from_pretrained(args.pretrained_teacher_model, subfolder="tokenizer", revision=args.teacher_revision, use_fast=False)
-    text_encoder = CLIPTextModel.from_pretrained(args.pretrained_teacher_model, subfolder="text_encoder", revision=args.teacher_revision)
-    vae = AutoencoderKL.from_pretrained(args.pretrained_teacher_model, subfolder="vae", revision=args.teacher_revision)
-    real_unet = UNet2DConditionModel.from_pretrained(args.pretrained_teacher_model, subfolder="unet", revision=args.teacher_revision)
+    noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_teacher_model, subfolder="scheduler")
+    tokenizer = AutoTokenizer.from_pretrained(args.pretrained_teacher_model, subfolder="tokenizer", use_fast=False)
+    text_encoder = BertModel.from_pretrained(args.pretrained_teacher_model, subfolder="text_encoder")
+    vae = AutoencoderTiny.from_pretrained(args.pretrained_vae_model_name_or_path, subfolder="vae")
+    real_unet = UNet2DConditionModel.from_pretrained(args.pretrained_teacher_model, subfolder="unet")
 
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
@@ -189,8 +109,6 @@ def setup_model(args, accelerator, weight_dtype):
     # Move unet, vae and text_encoder to device and cast to weight_dtype
     # The VAE is in float32 to avoid NaN losses.
     vae.to(accelerator.device)
-    if args.pretrained_vae_model_name_or_path is not None:
-        vae.to(dtype=weight_dtype)
     text_encoder.to(accelerator.device, dtype=weight_dtype)
 
     # Move teacher_unet to device, optionally cast to weight_dtype
@@ -302,7 +220,7 @@ def main(args):
         weight_dtype = torch.bfloat16
 
     (real_unet, fake_unet, student_unet,
-     noise_scheduler, tokenizer, text_encoder, vae, small_vae) = setup_model(args, accelerator, weight_dtype)
+     noise_scheduler, tokenizer, text_encoder, vae) = setup_model(args, accelerator, weight_dtype)
 
     setup_model_saving(accelerator, student_unet)
 
@@ -353,9 +271,11 @@ def main(args):
     for step in range(args.max_train_steps):
         prompts = next(dm_dataloader)
         latents_ref, images_ref, prompts_ref = next(ode_dataloader)
+        latents_ref = latents_ref.to(accelerator.device)
+        images_ref = images_ref.to(accelerator.device)
 
         if args.gradient_checkpointing:
-            fake_unet.disable_gradient_checkpointing()
+            accelerator.unwrap_model(fake_unet).disable_gradient_checkpointing()
 
         # ------------ train student unet ------------- #
 
@@ -372,11 +292,13 @@ def main(args):
         loss_kl = distribution_matching_loss(real_unet, fake_unet, noise_scheduler,
                                              latents_pred_cat, prompt_embeds, negative_prompt_embeds, args)
 
-        images_ref_pred = vae.decode(latents_ref_pred / vae.config.scaling_factor).sample
+        images_ref_pred = vae.decode(latents_ref_pred.to(vae.dtype) / vae.config.scaling_factor).sample
         images_ref_pred = (images_ref_pred / 2 + 0.5).clamp(0, 1)
+        images_ref_pred = images_ref_pred.to(dtype=images_ref.dtype)
+
         loss_reg = lpips(images_ref, images_ref_pred)
 
-        loss_g = loss_kl + loss_reg * args.reg_loss_weight
+        loss_g = loss_kl*args.kl_loss_weight + loss_reg * args.reg_loss_weight
 
         accelerator.backward(loss_g)
         if accelerator.sync_gradients:
@@ -387,7 +309,7 @@ def main(args):
 
         # ------------ train fake unet ------------- #
         if args.gradient_checkpointing:
-            fake_unet.enable_gradient_checkpointing()
+            accelerator.unwrap_model(fake_unet).disable_gradient_checkpointing()
 
         latents = stopgrad(latents_pred_cat)
         # Get the text embedding for conditioning
@@ -465,12 +387,12 @@ def main(args):
                     accelerator.save_state(save_path)
                     logger.info(f"Saved state to {save_path}")
 
-                # if global_step % args.validation_steps == 0:
-                #     log_validation(vae, target_unet, args, accelerator, weight_dtype, global_step, "target")
-                #     log_validation(vae, unet, args, accelerator, weight_dtype, global_step, "online")
+                if global_step % args.validation_steps == 0:
+                    log_validation(vae, student_unet, text_encoder, tokenizer, noise_scheduler, args, accelerator, weight_dtype, global_step, logging_dir)
 
-        logs = {"loss_g": loss.detach().item(), "loss_d": loss_d.detach().item()}
+        logs = {"loss_g": loss_g.detach().item(), "loss_d": loss_d.detach().item()}
         accelerator.log(logs, step=global_step)
+        logs.update({'step': global_step})
         logger.info(logs)
 
         if global_step >= args.max_train_steps:
@@ -486,6 +408,38 @@ def main(args):
     #     target_unet.save_pretrained(os.path.join(args.output_dir, "unet_target"))
 
     accelerator.end_training()
+
+
+def log_validation(vae, unet, text_encoder, tokenizer, noise_scheduler, args, accelerator, weight_dtype, step, logging_dir):
+    logger.info("Running validation... ")
+
+    unet = accelerator.unwrap_model(unet)
+
+    if args.seed is None:
+        generator = None
+    else:
+        generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
+
+    validation_prompts = [
+        "portrait photo of a girl, photograph, highly detailed face, depth of field, moody light, golden hour, style by Dan Winters, Russell James, Steve McCurry, centered, extremely detailed, Nikon D850, award winning photography",
+        "Self-portrait oil painting, a beautiful cyborg with golden hair, 8k",
+        "Astronaut in a jungle, cold color palette, muted colors, detailed, 8k",
+        "A photo of beautiful mountain with realistic sunset and blue lake, highly detailed, masterpiece",
+    ]
+
+    image_dir = os.path.join(logging_dir, 'images')
+    os.makedirs(image_dir, exist_ok=True)
+    for _, prompt in enumerate(validation_prompts):
+        with torch.cuda.amp.autocast():
+            latents = prepare_latents(accelerator.unwrap_model(unet), vae, batch_size=1, device=accelerator.device, dtype=weight_dtype, generator=generator)
+            prompt_embeds = encode_prompt(prompt, text_encoder, tokenizer)
+            latents_pred = generate(unet, noise_scheduler, latents, prompt_embeds)
+            images = vae.decode(latents_pred / vae.config.scaling_factor).sample
+            images = (images / 2 + 0.5).clamp(0, 1)
+
+            images = images[0].permute(1, 2, 0).detach().cpu().numpy()
+            images = (images*255).astype('uint8')
+            Image.fromarray(images).save(os.path.join(image_dir, f'{step}_{prompt}.jpg'))
 
 
 if __name__ == "__main__":
