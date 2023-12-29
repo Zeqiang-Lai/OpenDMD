@@ -234,6 +234,7 @@ def setup_dataloader(args):
 
 def main(args):
     accelerator, logging_dir = setup_training(args)
+    os.makedirs(logging_dir, exist_ok=True)
     file_handler = logging.FileHandler(os.path.join(logging_dir, "dmd.log"))
     logger.logger.addHandler(file_handler)
 
@@ -400,8 +401,8 @@ def main(args):
             fake_lr_scheduler.step()
             fake_optimizer.zero_grad()
 
-            logs.update({'loss_g': loss_d.detach().item()})
-            tracker.update({'loss_g': loss_d.detach().item()})
+            logs.update({'loss_d': loss_d.detach().item()})
+            tracker.update({'loss_d': loss_d.detach().item()})
 
         # Checks if the accelerator has performed an optimization step behind the scenes
         if accelerator.sync_gradients:

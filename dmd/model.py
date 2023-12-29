@@ -44,7 +44,7 @@ def generate_cfg(unet, scheduler, latents, prompt_embeds, negative_prompt_embeds
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         # compute the previous noisy sample x_t -> x_t-1
-        latents = scheduler.step(noise_pred, t, latents).sample
+        latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
 
     return latents
 
