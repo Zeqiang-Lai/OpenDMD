@@ -329,8 +329,9 @@ def main(args):
 
             if args.reg_loss_weight > 0:
                 latents_pred = torch.cat([latents_pred, latents_ref_pred], dim=0)
-            prompt_embeds = torch.cat([prompt_embeds, prompt_ref_embeds], dim=0)
-            negative_prompt_embeds = encode_prompt([""]*len(prompts+prompts_ref), text_encoder, tokenizer)
+                prompt_embeds = torch.cat([prompt_embeds, prompt_ref_embeds], dim=0)
+                prompts = prompts_ref + prompts
+            negative_prompt_embeds = encode_prompt([""]*len(prompts), text_encoder, tokenizer)
             loss_kl = distribution_matching_loss(real_unet, fake_unet, noise_scheduler,
                                                  latents_pred, prompt_embeds, negative_prompt_embeds, args)
 
