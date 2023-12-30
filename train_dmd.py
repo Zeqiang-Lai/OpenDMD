@@ -1,6 +1,7 @@
 import logging
 import os
 import shutil
+import time
 from pathlib import Path
 
 import accelerate
@@ -14,11 +15,7 @@ import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from diffusers import (
-    DDPMScheduler,
-    UNet2DConditionModel,
-    AutoencoderTiny,
-)
+from diffusers import DDPMScheduler, UNet2DConditionModel, AutoencoderTiny, AutoencoderKL
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import compute_snr
 from packaging import version
@@ -115,8 +112,17 @@ def setup_training(args):
 def setup_model(args, accelerator, weight_dtype):
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_teacher_model, subfolder="scheduler")
     tokenizer = AutoTokenizer.from_pretrained(args.pretrained_teacher_model, subfolder="tokenizer", use_fast=False)
-    text_encoder = BertModel.from_pretrained(args.pretrained_teacher_model, subfolder="text_encoder")
-    vae = AutoencoderTiny.from_pretrained(args.pretrained_vae_model_name_or_path, subfolder="vae")
+
+    if args.text_encoder_class == "clip":
+        text_encoder = CLIPTextModel.from_pretrained(args.pretrained_teacher_model, subfolder="text_encoder")
+    elif args.text_encoder_class == "bert":
+        text_encoder = BertModel.from_pretrained(args.pretrained_teacher_model, subfolder="text_encoder")
+
+    if args.vae_class == "tiny":
+        vae = AutoencoderTiny.from_pretrained(args.pretrained_vae_model_name_or_path)
+    else:
+        vae = AutoencoderKL.from_pretrained(args.pretrained_teacher_model, subfolder="vae")
+
     real_unet = UNet2DConditionModel.from_pretrained(args.pretrained_teacher_model, subfolder="unet")
 
     vae.requires_grad_(False)
@@ -159,28 +165,11 @@ def setup_model_saving(accelerator, student_unet):
             if accelerator.is_main_process:
                 student_unet.save_pretrained(os.path.join(output_dir, "student_unet"))
 
-                for i, model in enumerate(models):
-                    model.save_pretrained(os.path.join(output_dir, "unet"))
-
-                    # make sure to pop weight so that corresponding model is not saved again
-                    weights.pop()
-
         def load_model_hook(models, input_dir):
             load_model = UNet2DConditionModel.from_pretrained(os.path.join(input_dir, "student_unet"))
             student_unet.load_state_dict(load_model.state_dict())
             student_unet.to(accelerator.device)
             del load_model
-
-            for i in range(len(models)):
-                # pop models so that they are not loaded again
-                model = models.pop()
-
-                # load diffusers style into model
-                load_model = UNet2DConditionModel.from_pretrained(input_dir, subfolder="unet")
-                model.register_to_config(**load_model.config)
-
-                model.load_state_dict(load_model.state_dict())
-                del load_model
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
@@ -219,14 +208,10 @@ def setup_optimizer_scheduler(args, fake_unet, student_unet):
 
 
 def setup_dataloader(args):
-    dataset = TextDataset()
-    dm_dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=args.dm_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True
-    )
-    dataset = RegressionDataset()
-    reg_dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=args.reg_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True
-    )
+    dataset = TextDataset(args.dm_data_path)
+    dm_dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.dm_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True)
+    dataset = RegressionDataset(args.reg_data_path)
+    reg_dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.reg_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True)
     dm_dataloader = cycle(dm_dataloader)
     reg_dataloader = cycle(reg_dataloader)
     return dm_dataloader, reg_dataloader
@@ -247,8 +232,7 @@ def main(args):
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
-    (real_unet, fake_unet, student_unet,
-     noise_scheduler, tokenizer, text_encoder, vae) = setup_model(args, accelerator, weight_dtype)
+    (real_unet, fake_unet, student_unet, noise_scheduler, tokenizer, text_encoder, vae) = setup_model(args, accelerator, weight_dtype)
 
     setup_model_saving(accelerator, student_unet)
 
@@ -257,12 +241,17 @@ def main(args):
     fake_optimizer, student_optimizer, fake_lr_scheduler, student_lr_scheduler = setup_optimizer_scheduler(args, fake_unet, student_unet)
 
     # Prepare everything with our `accelerator`.
-    (fake_unet, student_unet,
-     fake_optimizer, student_optimizer,
-     fake_lr_scheduler, student_lr_scheduler,
-     dm_dataloader, reg_dataloader) = accelerator.prepare(
-         fake_unet, student_unet, fake_optimizer, student_optimizer,
-         fake_lr_scheduler, student_lr_scheduler, dm_dataloader, reg_dataloader
+    (
+        fake_unet,
+        student_unet,
+        fake_optimizer,
+        student_optimizer,
+        fake_lr_scheduler,
+        student_lr_scheduler,
+        dm_dataloader,
+        reg_dataloader,
+    ) = accelerator.prepare(
+        fake_unet, student_unet, fake_optimizer, student_optimizer, fake_lr_scheduler, student_lr_scheduler, dm_dataloader, reg_dataloader
     )
 
     # Train!
@@ -301,6 +290,8 @@ def main(args):
     tracker = MetricTracker(50)
 
     for step in range(args.max_train_steps):
+        start_time = time.time()
+
         prompts = next(dm_dataloader)
         latents_ref, images_ref, prompts_ref = next(reg_dataloader)
         latents_ref = latents_ref.to(accelerator.device)
@@ -308,6 +299,8 @@ def main(args):
 
         if args.gradient_checkpointing:
             accelerator.unwrap_model(fake_unet).disable_gradient_checkpointing()
+
+        tracker.update({"data_time": time.time() - start_time})
 
         logs = {}
         # ------------ train student unet ------------- #
@@ -325,18 +318,19 @@ def main(args):
 
         if args.kl_loss_weight > 0:
             prompt_embeds = encode_prompt(prompts, text_encoder, tokenizer)
-            latents = prepare_latents(accelerator.unwrap_model(student_unet), vae, batch_size=len(prompts), device=accelerator.device, dtype=weight_dtype)
+            latents = prepare_latents(
+                accelerator.unwrap_model(student_unet), vae, batch_size=len(prompts), device=accelerator.device, dtype=weight_dtype
+            )
             latents_pred = generate(student_unet, noise_scheduler, latents, prompt_embeds)
 
             if args.reg_loss_weight > 0:
                 latents_pred = torch.cat([latents_pred, latents_ref_pred], dim=0)
                 prompt_embeds = torch.cat([prompt_embeds, prompt_ref_embeds], dim=0)
                 prompts = prompts_ref + prompts
-            negative_prompt_embeds = encode_prompt([""]*len(prompts), text_encoder, tokenizer)
-            loss_kl = distribution_matching_loss(real_unet, fake_unet, noise_scheduler,
-                                                 latents_pred, prompt_embeds, negative_prompt_embeds, args)
+            negative_prompt_embeds = encode_prompt([""] * len(prompts), text_encoder, tokenizer)
+            loss_kl = distribution_matching_loss(real_unet, fake_unet, noise_scheduler, latents_pred, prompt_embeds, negative_prompt_embeds, args)
 
-            loss_g += loss_kl*args.kl_loss_weight
+            loss_g += loss_kl * args.kl_loss_weight
 
         accelerator.backward(loss_g)
         if accelerator.sync_gradients:
@@ -345,8 +339,8 @@ def main(args):
         student_lr_scheduler.step()
         student_optimizer.zero_grad(set_to_none=True)
 
-        logs.update({'loss_g': loss_g.detach().item()})
-        tracker.update({'loss_g': loss_g.detach().item()})
+        logs.update({"loss_g": loss_g.detach().item()})
+        tracker.update({"loss_g": loss_g.detach().item()})
 
         # ------------ train fake unet ------------- #
         if args.train_fake_unet:
@@ -386,9 +380,7 @@ def main(args):
                 if noise_scheduler.config.prediction_type == "v_prediction":
                     # Velocity objective requires that we add one to SNR values before we divide by them.
                     snr = snr + 1
-                mse_loss_weights = (
-                    torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
-                )
+                mse_loss_weights = torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
 
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="none")
                 loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
@@ -401,8 +393,10 @@ def main(args):
             fake_lr_scheduler.step()
             fake_optimizer.zero_grad()
 
-            logs.update({'loss_d': loss_d.detach().item()})
-            tracker.update({'loss_d': loss_d.detach().item()})
+            logs.update({"loss_d": loss_d.detach().item()})
+            tracker.update({"loss_d": loss_d.detach().item()})
+
+        tracker.update({"optim_time": time.time() - start_time})
 
         # Checks if the accelerator has performed an optimization step behind the scenes
         if accelerator.sync_gradients:
@@ -433,11 +427,13 @@ def main(args):
                     logger.info(f"Saved state to {save_path}")
 
                 if global_step % args.validation_steps == 0:
-                    log_validation(vae, student_unet, text_encoder, tokenizer, noise_scheduler, args, accelerator, weight_dtype, global_step, logging_dir)
+                    log_validation(
+                        vae, student_unet, text_encoder, tokenizer, noise_scheduler, args, accelerator, weight_dtype, global_step, logging_dir
+                    )
 
         accelerator.log(logs, step=global_step)
 
-        print_logs = {'gstep': global_step}
+        print_logs = {"gstep": global_step}
         print_logs.update(tracker.mean())
         logger.info(print_logs)
 
@@ -462,19 +458,21 @@ def log_validation(vae, unet, text_encoder, tokenizer, noise_scheduler, args, ac
     else:
         generator = torch.Generator(device=accelerator.device).manual_seed(args.seed)
 
-    image_dir = os.path.join(logging_dir, 'images')
+    image_dir = os.path.join(logging_dir, "images")
     os.makedirs(image_dir, exist_ok=True)
 
     with torch.cuda.amp.autocast():
-        latents = prepare_latents(accelerator.unwrap_model(unet), vae, batch_size=1, device=accelerator.device, dtype=weight_dtype, generator=generator)
+        latents = prepare_latents(
+            accelerator.unwrap_model(unet), vae, batch_size=1, device=accelerator.device, dtype=weight_dtype, generator=generator
+        )
         prompt_embeds = encode_prompt(args.validation_prompt, text_encoder, tokenizer)
         latents_pred = generate(unet, noise_scheduler, latents, prompt_embeds)
         images = vae.decode(latents_pred / vae.config.scaling_factor).sample
         images = (images / 2 + 0.5).clamp(0, 1)
 
         images = images[0].permute(1, 2, 0).detach().cpu().numpy()
-        images = (images*255).astype('uint8')
-        Image.fromarray(images).save(os.path.join(image_dir, f'{step}_{args.validation_prompt}.jpg'))
+        images = (images * 255).astype("uint8")
+        Image.fromarray(images).save(os.path.join(image_dir, f"{step}_{args.validation_prompt}.jpg"))
 
 
 if __name__ == "__main__":

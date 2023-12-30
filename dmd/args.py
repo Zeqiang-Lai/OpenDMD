@@ -2,7 +2,7 @@ import argparse
 import os
 
 
-def add_model_checkpoint_args(parser):
+def add_model_checkpoint_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "--pretrained_teacher_model",
         type=str,
@@ -16,6 +16,19 @@ def add_model_checkpoint_args(parser):
         default=None,
         help="Path to pretrained VAE model with better numerical stability. More details: https://github.com/huggingface/diffusers/pull/4038.",
     )
+    parser.add_argument(
+        "--vae_class",
+        type=str,
+        default="tiny",
+        choices=["tiny", "kl"],
+    )
+    parser.add_argument(
+        "--text_encoder_class",
+        type=str,
+        default="clip",
+        choice=["clip", "bert"],
+    )
+
     # ... (add other model checkpoint args)
 
 
@@ -120,9 +133,7 @@ def add_training_args(parser):
         help="Total number of training steps to perform.",
     )
     parser.add_argument("--validation_steps", type=int, default=200, help="Run validation every X steps.")
-    parser.add_argument(
-        "--validation_prompt", type=str, default=None, help="A prompt that is sampled during training for inference."
-    )
+    parser.add_argument("--validation_prompt", type=str, default=None, help="A prompt that is sampled during training for inference.")
     # ----------Accelerate Arguments----------
     parser.add_argument(
         "--tracker_project_name",
@@ -224,6 +235,8 @@ def add_dataloader_args(parser):
     )
     parser.add_argument("--dm_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader.")
     parser.add_argument("--reg_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader.")
+    parser.add_argument("--reg_data_path", type=str)
+    parser.add_argument("--dm_data_path", type=str)
 
 
 def parse_args():
