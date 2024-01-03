@@ -26,7 +26,7 @@ def add_model_checkpoint_args(parser: argparse.ArgumentParser):
         "--text_encoder_class",
         type=str,
         default="clip",
-        choice=["clip", "bert"],
+        choices=["clip", "bert"],
     )
 
     # ... (add other model checkpoint args)

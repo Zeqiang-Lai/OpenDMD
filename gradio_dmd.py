@@ -1,16 +1,21 @@
+import argparse
 import time
+
 import gradio as gr
-from diffusers import UNet2DConditionModel, DiffusionPipeline
 import torch
+from diffusers import DiffusionPipeline, UNet2DConditionModel
 
 from dmd.scheduling_dmd import DMDScheduler
 
-unet_path = ''
-model_path = ''
-device = torch.device("cuda" if torch.cuda.is_available() else 'cpu')
+parser = argparse.ArgumentParser()
+parser.add_argument("--unet_path", type=str)
+parser.add_argument("--model_path", type=str)
+args = parser.parse_args()
 
-unet = UNet2DConditionModel.from_pretrained(unet_path)
-pipe = DiffusionPipeline.from_pretrained(model_path, unet=unet)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+unet = UNet2DConditionModel.from_pretrained(args.unet_path)
+pipe = DiffusionPipeline.from_pretrained(args.model_path, unet=unet)
 pipe.scheduler = DMDScheduler.from_config(pipe.scheduler.config)
 pipe.to(device=device, dtype=torch.float16)
 
@@ -44,22 +49,18 @@ css = """
 with gr.Blocks(css=css) as demo:
     with gr.Column(elem_id="container"):
         gr.Markdown(
-            """# SD1.5 Distribution Matching Distillation
+            """# Distribution Matching Distillation
             """,
             elem_id="intro",
         )
         with gr.Row():
             with gr.Row():
-                prompt = gr.Textbox(
-                    placeholder="Insert your prompt here:", scale=5, container=False
-                )
+                prompt = gr.Textbox(placeholder="Insert your prompt here:", scale=5, container=False)
                 generate_bt = gr.Button("Generate", scale=1)
 
         image = gr.Image(type="filepath")
         with gr.Accordion("Advanced options", open=False):
-            seed = gr.Slider(
-                randomize=True, minimum=0, maximum=12013012031030, label="Seed", step=1
-            )
+            seed = gr.Slider(randomize=True, minimum=0, maximum=12013012031030, label="Seed", step=1)
 
         inputs = [prompt, seed]
         generate_bt.click(fn=predict, inputs=inputs, outputs=image, show_progress=False)

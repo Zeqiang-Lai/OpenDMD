@@ -5,8 +5,8 @@ python train_dmd.py \
     --dm_data_path diffusion_db_prompts.txt \
     --reg_data_path data/diffusion_db_lykon_dreamshaper_8 \
     --mixed_precision=fp16 \
-    --dm_batch_size=4 \
-    --reg_batch_size=2 \
+    --dm_batch_size=24 \
+    --reg_batch_size=12 \
     --max_train_steps=100000 \
     --validation_steps=100 \
     --gradient_accumulation_steps=1 \
