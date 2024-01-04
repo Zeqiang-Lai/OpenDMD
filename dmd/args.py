@@ -112,7 +112,7 @@ def add_training_args(parser):
         ),
     )
     parser.add_argument(
-        "--cast_teacher_unet",
+        "--cast_teacher_model",
         action="store_true",
         help="Whether to cast the teacher U-Net to the precision specified by `--mixed_precision`.",
     )
@@ -180,7 +180,7 @@ def add_advanced_training_args(parser):
         default=1.0,
     )
     parser.add_argument(
-        "--train_fake_unet",
+        "--train_fake_model",
         action="store_true",
     )
 
