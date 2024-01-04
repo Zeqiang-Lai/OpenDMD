@@ -5,7 +5,7 @@ accelerate launch train_dmd.py \
     --model_class transformer \
     --text_encoder_class t5 \
     --dm_data_path diffusion_db_prompts.txt \
-    --reg_data_path data/diffusion_db_lykon_dreamshaper_8 \
+    --reg_data_path data/diffusion_db_pixart_xl_2_512x512 \
     --mixed_precision=fp16 \
     --dm_batch_size=8 \
     --reg_batch_size=4 \

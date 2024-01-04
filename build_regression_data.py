@@ -4,13 +4,15 @@ import os
 import time
 import signal
 import json
+import random
 
 import torch
 from diffusers import AutoPipelineForText2Image, DEISMultistepScheduler
 
 caption_path = "diffusion_db_prompts.txt"
-model_id = "lykon/dreamshaper-8"
-save_dir = "data/diffusion_db_lykon_dreamshaper_8"
+model_id = "PixArt-alpha/PixArt-XL-2-512x512"
+save_dir = "data/diffusion_db_pixart_xl_2_512x512"
+size = None
 
 
 def run(device_id, job_id, worker_id, n_gpu, n_worker):
@@ -30,6 +32,9 @@ def run(device_id, job_id, worker_id, n_gpu, n_worker):
     # load captions part
     with open(caption_path, "r") as f:
         prompts = f.readlines()
+        if size is not None:
+            prompts = random.choices(prompts, k=size)
+
     chunk_size = len(prompts) // n_job
     prompts = prompts[global_id * chunk_size : (global_id + 1) * chunk_size]
     print("[{}] process chunk size {}, range [{}:{}]".format(job_id, chunk_size, global_id * chunk_size, (global_id + 1) * chunk_size))
@@ -43,7 +48,10 @@ def run(device_id, job_id, worker_id, n_gpu, n_worker):
             height = 512
             width = 512
             num_inference_steps = 25
-            num_channels_latents = pipe.unet.config.in_channels
+            try:
+                num_channels_latents = pipe.unet.config.in_channels
+            except Exception as e:
+                num_channels_latents = pipe.transformer.config.in_channels
 
             latents = pipe.prepare_latents(
                 batch_size,
@@ -74,7 +82,18 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpus", default=None, type=str, help="Comma separated list of GPUs to use")
     parser.add_argument("--workers", default=1, type=int, help="Number of workers spawned per GPU (default 1)")
+    parser.add_argument("--size", default=None, type=int)
+    parser.add_argument("--caption_path", default="diffusion_db_prompts.txt", type=str)
+    parser.add_argument("--model_id", default="lykon/dreamshaper-8", type=str)
+    parser.add_argument("--save_dir", default="data/diffusion_db_lykon_dreamshaper_8", type=str)
     args = parser.parse_args()
+
+    global model_id, save_dir, caption_path, size
+    model_id = args.model_id
+    save_dir = args.save_dir
+    caption_path = args.caption_path
+    size = args.size
+
     return args
 
 

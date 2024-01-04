@@ -7,7 +7,8 @@ Unofficial Implementation of [One-step Diffusion with Distribution Matching Dist
 - Build Regression Dataset
 
 ```bash
-python build_regression_data.py
+python build_regression_data.py --gpus 0,1
+python build_regression_data.py --gpus "0,1" --model_id PixArt-alpha/PixArt-XL-2-512x512 --save_dir data/diffusion_db_pixart_xl_2_512x512
 ```
 
 - Train 
