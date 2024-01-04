@@ -26,7 +26,13 @@ def add_model_checkpoint_args(parser: argparse.ArgumentParser):
         "--text_encoder_class",
         type=str,
         default="clip",
-        choices=["clip", "bert"],
+        choices=["clip", "bert", "t5"],
+    )
+    parser.add_argument(
+        "--model_class",
+        type=str,
+        default="unet",
+        choices=["unet", "transformer"],
     )
 
     # ... (add other model checkpoint args)

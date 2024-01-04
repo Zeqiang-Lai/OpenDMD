@@ -1,12 +1,14 @@
 # python -m torch.distributed.launch --use_env --nodes=1 --nproc_per_node=8 
 accelerate launch train_dmd.py \
-    --pretrained_teacher_model lykon/dreamshaper-8 \
+    --pretrained_teacher_model PixArt-alpha/PixArt-XL-2-512x512 \
     --pretrained_vae_model_name_or_path madebyollin/taesd \
+    --model_class transformer \
+    --text_encoder_class t5 \
     --dm_data_path diffusion_db_prompts.txt \
     --reg_data_path data/diffusion_db_lykon_dreamshaper_8 \
     --mixed_precision=fp16 \
-    --dm_batch_size=24 \
-    --reg_batch_size=12 \
+    --dm_batch_size=8 \
+    --reg_batch_size=4 \
     --max_train_steps=100000 \
     --validation_steps=100 \
     --gradient_accumulation_steps=1 \
@@ -14,8 +16,7 @@ accelerate launch train_dmd.py \
     --reg_loss_weight=0.25 \
     --train_fake_model \
     --learning_rate=1e-5 \
-    --gradient_checkpointing \
-    --output_dir="saved/dmd" \
+    --output_dir="saved/dmd_pixart" \
     --dataloader_num_workers=8 \
     --checkpointing_steps=1000 --checkpoints_total_limit=3 \
     --resume_from_checkpoint=latest \

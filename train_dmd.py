@@ -15,23 +15,22 @@ import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
-from diffusers import DDPMScheduler, UNet2DConditionModel, AutoencoderTiny, AutoencoderKL
+from diffusers import DDPMScheduler, UNet2DConditionModel, AutoencoderTiny, AutoencoderKL, Transformer2DModel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import compute_snr
 from packaging import version
-from transformers import AutoTokenizer, CLIPTextModel, BertModel
+from transformers import AutoTokenizer, CLIPTextModel, BertModel, T5EncoderModel
 from PIL import Image
 from dmd.args import parse_args
 from dmd.data import cycle, TextDataset, RegressionDataset
-from dmd.model import (
-    distribution_matching_loss,
-    encode_prompt,
-    generate,
-    prepare_latents,
-    stopgrad,
-)
+from dmd.model import distribution_matching_loss, encode_prompt, generate, prepare_latents, stopgrad, forward_model
 
 logger = get_logger(__name__)
+
+
+# this can be modified by --model_class
+# see main()
+MODEL_CLS = UNet2DConditionModel
 
 
 class MetricTracker:
@@ -109,6 +108,14 @@ def setup_training(args):
     return accelerator, logging_dir
 
 
+def setup_model_class(model_cls):
+    global MODEL_CLS
+    if model_cls == "unet":
+        MODEL_CLS = UNet2DConditionModel
+    elif model_cls == "transformer":
+        MODEL_CLS = Transformer2DModel
+
+
 def setup_model(args, accelerator, weight_dtype):
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_teacher_model, subfolder="scheduler")
     tokenizer = AutoTokenizer.from_pretrained(args.pretrained_teacher_model, subfolder="tokenizer", legacy=False, use_fast=False)
@@ -117,23 +124,25 @@ def setup_model(args, accelerator, weight_dtype):
         text_encoder = CLIPTextModel.from_pretrained(args.pretrained_teacher_model, subfolder="text_encoder")
     elif args.text_encoder_class == "bert":
         text_encoder = BertModel.from_pretrained(args.pretrained_teacher_model, subfolder="text_encoder")
+    elif args.text_encoder_class == "t5":
+        text_encoder = T5EncoderModel.from_pretrained(args.pretrained_teacher_model, subfolder="text_encoder")
 
     if args.vae_class == "tiny":
         vae = AutoencoderTiny.from_pretrained(args.pretrained_vae_model_name_or_path)
     else:
         vae = AutoencoderKL.from_pretrained(args.pretrained_teacher_model, subfolder="vae")
 
-    real_model = UNet2DConditionModel.from_pretrained(args.pretrained_teacher_model, subfolder="unet")
+    real_model = MODEL_CLS.from_pretrained(args.pretrained_teacher_model, subfolder=args.model_class)
 
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     real_model.requires_grad_(False)
 
-    fake_model = UNet2DConditionModel(**real_model.config)
+    fake_model = MODEL_CLS(**real_model.config)
     fake_model.load_state_dict(real_model.state_dict(), strict=False)
     fake_model.train()
 
-    student_model = UNet2DConditionModel(**real_model.config)
+    student_model = MODEL_CLS(**real_model.config)
     student_model.load_state_dict(real_model.state_dict(), strict=False)
     student_model.train()
 
@@ -166,7 +175,7 @@ def setup_model_saving(accelerator, student_model):
                 student_model.save_pretrained(os.path.join(output_dir, "student_model"))
 
         def load_model_hook(models, input_dir):
-            load_model = UNet2DConditionModel.from_pretrained(os.path.join(input_dir, "student_model"))
+            load_model = MODEL_CLS.from_pretrained(os.path.join(input_dir, "student_model"))
             student_model.load_state_dict(load_model.state_dict())
             student_model.to(accelerator.device)
             del load_model
@@ -232,6 +241,7 @@ def main(args):
     elif accelerator.mixed_precision == "bf16":
         weight_dtype = torch.bfloat16
 
+    setup_model_class(args.model_class)
     (real_model, fake_model, student_model, noise_scheduler, tokenizer, text_encoder, vae) = setup_model(args, accelerator, weight_dtype)
 
     setup_model_saving(accelerator, student_model)
@@ -368,7 +378,7 @@ def main(args):
                 raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
             # Predict the noise residual and compute loss
-            model_pred = fake_model(noisy_latents, timesteps, encoder_hidden_states).sample
+            model_pred = forward_model(fake_model, latents=noisy_latents, timestep=timesteps, prompt_embeds=encoder_hidden_states)
 
             if args.snr_gamma is None:
                 loss_d = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
