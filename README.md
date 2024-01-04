@@ -16,6 +16,11 @@ python build_regression_data.py
 bash train.sh
 ```
 
+- Gradio demo
+
+```bash
+python gradio_dmd.py --model_path lykon/dreamshaper-8 --unet_path saved/dmd/checkpoint-1000/student_unet
+```
 
 ## Citation
 

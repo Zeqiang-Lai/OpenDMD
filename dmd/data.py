@@ -36,7 +36,10 @@ class RegressionDataset(torch.utils.data.Dataset):
             if name.endswith(".json"):
                 with open(os.path.join(data_root, name), "r") as f:
                     for line in f.readlines():
-                        meta.append(json.loads(line))
+                        try:
+                            meta.append(json.loads(line))
+                        except Exception as e:
+                            print(f"Error parsing: {line}")
         return meta
 
     def __getitem__(self, index):
