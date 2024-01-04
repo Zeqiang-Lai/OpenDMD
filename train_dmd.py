@@ -23,7 +23,7 @@ from transformers import AutoTokenizer, CLIPTextModel, BertModel, T5EncoderModel
 from PIL import Image
 from dmd.args import parse_args
 from dmd.data import cycle, TextDataset, RegressionDataset
-from dmd.model import distribution_matching_loss, encode_prompt, generate, prepare_latents, stopgrad, forward_model
+from dmd.model import distribution_matching_loss, encode_prompt, generate, prepare_latents, stopgrad, forward_model, encode_prompt_all
 
 logger = get_logger(__name__)
 
@@ -298,6 +298,7 @@ def main(args):
 
     lpips = piq.LPIPS()
     tracker = MetricTracker(50)
+    log_validation(vae, student_model, text_encoder, tokenizer, noise_scheduler, args, accelerator, weight_dtype, global_step, logging_dir)
 
     for step in range(args.max_train_steps):
         start_time = time.time()
@@ -335,9 +336,9 @@ def main(args):
 
             if args.reg_loss_weight > 0:
                 latents_pred = torch.cat([latents_pred, latents_ref_pred], dim=0)
-                prompt_embeds = torch.cat([prompt_embeds, prompt_ref_embeds], dim=0)
-                prompts = prompts_ref + prompts
-            negative_prompt_embeds = encode_prompt([""] * len(prompts), text_encoder, tokenizer)
+                prompts = prompts + prompts_ref
+            # TODO: optimize dumplicate prompt computation
+            prompt_embeds, negative_prompt_embeds = encode_prompt_all(prompts, text_encoder, tokenizer)
             loss_kl = distribution_matching_loss(real_model, fake_model, noise_scheduler, latents_pred, prompt_embeds, negative_prompt_embeds, args)
 
             loss_g += loss_kl * args.kl_loss_weight

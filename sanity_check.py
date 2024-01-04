@@ -1,5 +1,5 @@
 import torch
-from diffusers import PixArtAlphaPipeline, StableDiffusionPipeline
+from diffusers import PixArtAlphaPipeline, StableDiffusionPipeline, AutoencoderTiny
 from PIL import Image
 
 from dmd.model import encode_prompt, encode_prompt_all, generate_cfg, prepare_latents
@@ -40,6 +40,7 @@ def test_sd():
 def test_pixart():
     model_id = "PixArt-alpha/PixArt-XL-2-512x512"
     pipe = PixArtAlphaPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
+    pipe.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd", torch_dtype=torch.float16)
     pipe.to(device="cuda")
 
     with torch.no_grad():
@@ -59,7 +60,7 @@ def test_pixart():
             latents,
             prompt_embeds,
             negative_prompt_embeds,
-            num_inference_steps=50,
+            num_inference_steps=10,
         )
         images = pipe.vae.decode(latents / pipe.vae.config.scaling_factor, return_dict=False)[0]
 

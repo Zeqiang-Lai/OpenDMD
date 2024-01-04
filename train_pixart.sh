@@ -1,16 +1,18 @@
 # python -m torch.distributed.launch --use_env --nodes=1 --nproc_per_node=8 
 accelerate launch train_dmd.py \
     --pretrained_teacher_model PixArt-alpha/PixArt-XL-2-512x512 \
-    --pretrained_vae_model_name_or_path madebyollin/taesdxl \
+    --pretrained_vae_model_name_or_path madebyollin/taesd \
     --model_class transformer \
     --text_encoder_class t5 \
+    --vae_class tiny \
     --dm_data_path diffusion_db_prompts.txt \
     --reg_data_path data/diffusion_db_pixart_xl_2_512x512 \
     --mixed_precision=fp16 \
     --dm_batch_size=8 \
     --reg_batch_size=4 \
+    --guidance_scale=4.5 \
     --max_train_steps=100000 \
-    --validation_steps=100 \
+    --validation_steps=10 \
     --gradient_accumulation_steps=1 \
     --kl_loss_weight=1.0 \
     --reg_loss_weight=0.25 \
@@ -18,7 +20,7 @@ accelerate launch train_dmd.py \
     --learning_rate=1e-5 \
     --output_dir="saved/dmd_pixart" \
     --dataloader_num_workers=8 \
-    --checkpointing_steps=100 --checkpoints_total_limit=3 \
+    --checkpointing_steps=1000 --checkpoints_total_limit=3 \
     --resume_from_checkpoint=latest \
     --report_to=tensorboard \
     --seed=453645634 \
