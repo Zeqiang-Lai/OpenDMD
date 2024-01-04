@@ -3,6 +3,7 @@ import torch.nn.functional as F
 from diffusers.utils.torch_utils import randn_tensor
 from diffusers import Transformer2DModel
 from accelerate.utils.other import extract_model_from_parallel
+from transformers import T5EncoderModel
 
 
 def prepare_latents(model, vae, batch_size, device, dtype, generator=None):
@@ -18,29 +19,86 @@ def prepare_latents(model, vae, batch_size, device, dtype, generator=None):
     return latents
 
 
+def mask_text_embeddings(emb, mask):
+    if emb.shape[0] == 1:
+        keep_index = mask.sum().item()
+        return emb[:, :, :keep_index, :], keep_index
+    else:
+        masked_feature = emb * mask[:, None, :, None]
+        return masked_feature, emb.shape[2]
+
+
 def encode_prompt(captions, text_encoder, tokenizer):
+    max_length = tokenizer.model_max_length
+
+    is_pixart = isinstance(text_encoder, T5EncoderModel)
+    if is_pixart:
+        max_length = 120
+
     with torch.no_grad():
-        text_inputs = tokenizer(captions, padding="max_length", max_length=tokenizer.model_max_length, truncation=True, return_tensors="pt")
+        text_inputs = tokenizer(captions, padding="max_length", max_length=max_length, truncation=True, return_tensors="pt")
         text_input_ids = text_inputs.input_ids
         prompt_embeds = text_encoder(text_input_ids.to(text_encoder.device))[0]
+        attention_mask = text_inputs.attention_mask.to(text_encoder.device)
+
+    if is_pixart:
+        prompt_embeds = prompt_embeds.unsqueeze(1)
+        masked_prompt_embeds, _ = mask_text_embeddings(prompt_embeds, attention_mask)
+        masked_prompt_embeds = masked_prompt_embeds.squeeze(1)
+        return masked_prompt_embeds
+
     return prompt_embeds
 
 
-def generate_cfg(model, scheduler, latents, prompt_embeds, negative_prompt_embeds, num_inference_steps=1, guidance_scale=7.5):
+def encode_prompt_all(captions, text_encoder, tokenizer):
+    max_length = tokenizer.model_max_length
+
+    is_pixart = isinstance(text_encoder, T5EncoderModel)
+    if is_pixart:
+        max_length = 120
+
+    with torch.no_grad():
+        text_inputs = tokenizer(captions, padding="max_length", max_length=max_length, truncation=True, return_tensors="pt")
+        text_input_ids = text_inputs.input_ids
+        prompt_embeds = text_encoder(text_input_ids.to(text_encoder.device))[0]
+        attention_mask = text_inputs.attention_mask.to(text_encoder.device)
+
+    with torch.no_grad():
+        text_inputs = tokenizer([""] * len(captions), padding="max_length", max_length=max_length, truncation=True, return_tensors="pt")
+        text_input_ids = text_inputs.input_ids
+        negative_prompt_embeds = text_encoder(text_input_ids.to(text_encoder.device))[0]
+
+    if is_pixart:
+        prompt_embeds = prompt_embeds.unsqueeze(1)
+        masked_prompt_embeds, keep_indices = mask_text_embeddings(prompt_embeds, attention_mask)
+        masked_prompt_embeds = masked_prompt_embeds.squeeze(1)
+        masked_negative_prompt_embeds = negative_prompt_embeds[:, :keep_indices, :] if negative_prompt_embeds is not None else None
+        return masked_prompt_embeds, masked_negative_prompt_embeds
+
+    return prompt_embeds, negative_prompt_embeds
+
+
+def generate_cfg(model, scheduler, latents, prompt_embeds, negative_prompt_embeds=None, num_inference_steps=1, guidance_scale=7.5):
     scheduler.set_timesteps(num_inference_steps, device=model.device)
     timesteps = scheduler.timesteps
 
-    prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+    if negative_prompt_embeds is not None:
+        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
 
     for i, t in enumerate(timesteps):
         # expand the latents if we are doing classifier free guidance
-        latent_model_input = torch.cat([latents] * 2)
+        if negative_prompt_embeds is not None:
+            latent_model_input = torch.cat([latents] * 2)
+        else:
+            latent_model_input = latents
+
         # predict the noise residual
-        noise_pred = model(latent_model_input, t, encoder_hidden_states=prompt_embeds).sample
+        noise_pred = forward_model(model, latents=latent_model_input, timestep=t, prompt_embeds=prompt_embeds)
 
         # perform guidance
-        noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-        noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+        if negative_prompt_embeds is not None:
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 
         # compute the previous noisy sample x_t -> x_t-1
         latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
