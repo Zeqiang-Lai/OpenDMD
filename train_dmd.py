@@ -9,6 +9,7 @@ import diffusers
 import piq
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 import torch.utils.checkpoint
 import torch.utils.data
 import transformers
@@ -23,7 +24,7 @@ from transformers import AutoTokenizer, CLIPTextModel, BertModel, T5EncoderModel
 from PIL import Image
 from dmd.args import parse_args
 from dmd.data import cycle, TextDataset, RegressionDataset
-from dmd.model import distribution_matching_loss, encode_prompt, generate, prepare_latents, stopgrad, forward_model, encode_prompt_all
+from dmd.model import distribution_matching_loss, encode_prompt, generate, prepare_latents, stopgrad, forward_model
 
 logger = get_logger(__name__)
 
@@ -296,9 +297,11 @@ def main(args):
             accelerator.load_state(os.path.join(args.output_dir, path))
             global_step = int(path.split("-")[1])
 
-    lpips = piq.LPIPS()
+    # lpips = piq.LPIPS()
+    lpips = nn.MSELoss()
     tracker = MetricTracker(50)
-    log_validation(vae, student_model, text_encoder, tokenizer, noise_scheduler, args, accelerator, weight_dtype, global_step, logging_dir)
+    if accelerator.is_main_process:
+        log_validation(vae, student_model, text_encoder, tokenizer, noise_scheduler, args, accelerator, weight_dtype, global_step, logging_dir)
 
     for step in range(args.max_train_steps):
         start_time = time.time()
@@ -319,8 +322,8 @@ def main(args):
         loss_g = 0
 
         if args.reg_loss_weight > 0:
-            prompt_ref_embeds = encode_prompt(prompts_ref, text_encoder, tokenizer)
-            latents_ref_pred = generate(student_model, noise_scheduler, latents_ref, prompt_ref_embeds)
+            prompt_ref_embeds, prompt_ref_attention_masks = encode_prompt(prompts_ref, text_encoder, tokenizer)
+            latents_ref_pred = generate(student_model, noise_scheduler, latents_ref, prompt_ref_embeds, prompt_ref_attention_masks)
             images_ref_pred = vae.decode(latents_ref_pred.to(vae.dtype) / vae.config.scaling_factor).sample
             images_ref_pred = (images_ref_pred / 2 + 0.5).clamp(0, 1)
             images_ref_pred = images_ref_pred.to(dtype=images_ref.dtype)
@@ -328,18 +331,31 @@ def main(args):
             loss_g += loss_reg * args.reg_loss_weight
 
         if args.kl_loss_weight > 0:
-            prompt_embeds = encode_prompt(prompts, text_encoder, tokenizer)
+            prompt_embeds, prompt_attention_masks = encode_prompt(prompts, text_encoder, tokenizer)
             latents = prepare_latents(
                 accelerator.unwrap_model(student_model), vae, batch_size=len(prompts), device=accelerator.device, dtype=weight_dtype
             )
-            latents_pred = generate(student_model, noise_scheduler, latents, prompt_embeds)
+            latents_pred = generate(student_model, noise_scheduler, latents, prompt_embeds, prompt_attention_masks)
 
             if args.reg_loss_weight > 0:
                 latents_pred = torch.cat([latents_pred, latents_ref_pred], dim=0)
                 prompts = prompts + prompts_ref
-            # TODO: optimize dumplicate prompt computation
-            prompt_embeds, negative_prompt_embeds = encode_prompt_all(prompts, text_encoder, tokenizer)
-            loss_kl = distribution_matching_loss(real_model, fake_model, noise_scheduler, latents_pred, prompt_embeds, negative_prompt_embeds, args)
+                prompt_embeds = torch.cat([prompt_embeds, prompt_ref_embeds], dim=0)
+                if prompt_attention_masks is not None:
+                    prompt_attention_masks = torch.cat([prompt_attention_masks, prompt_ref_attention_masks], dim=0)
+
+            negative_prompt_embeds, negative_prompt_attention_masks = encode_prompt([""] * len(prompts), text_encoder, tokenizer)
+            loss_kl = distribution_matching_loss(
+                real_model,
+                fake_model,
+                noise_scheduler,
+                latents_pred,
+                prompt_embeds,
+                prompt_attention_masks,
+                negative_prompt_embeds,
+                negative_prompt_attention_masks,
+                args,
+            )
 
             loss_g += loss_kl * args.kl_loss_weight
 
@@ -358,9 +374,17 @@ def main(args):
             if args.gradient_checkpointing:
                 accelerator.unwrap_model(fake_model).disable_gradient_checkpointing()
 
-            latents = stopgrad(latents_pred)
-            # Get the text embedding for conditioning
-            encoder_hidden_states = stopgrad(prompt_embeds)
+            if args.kl_loss_weight > 0:
+                latents = stopgrad(latents_pred)
+                encoder_hidden_states = stopgrad(prompt_embeds)
+                if prompt_attention_masks is not None:
+                    prompt_attention_masks = stopgrad(prompt_attention_masks)
+            else:
+                latents = stopgrad(latents_ref_pred)
+                encoder_hidden_states = stopgrad(prompt_ref_embeds)
+                prompt_attention_masks = None
+                if prompt_ref_attention_masks is not None:
+                    prompt_attention_masks = stopgrad(prompt_ref_attention_masks)
 
             # Sample noise that we'll add to the latents
             noise = torch.randn_like(latents)
@@ -379,7 +403,13 @@ def main(args):
                 raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
             # Predict the noise residual and compute loss
-            model_pred = forward_model(fake_model, latents=noisy_latents, timestep=timesteps, prompt_embeds=encoder_hidden_states)
+            model_pred = forward_model(
+                fake_model,
+                latents=noisy_latents,
+                timestep=timesteps,
+                prompt_embeds=encoder_hidden_states,
+                prompt_attention_masks=prompt_attention_masks,
+            )
 
             if args.snr_gamma is None:
                 loss_d = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
@@ -476,8 +506,8 @@ def log_validation(vae, model, text_encoder, tokenizer, noise_scheduler, args, a
         latents = prepare_latents(
             accelerator.unwrap_model(model), vae, batch_size=1, device=accelerator.device, dtype=weight_dtype, generator=generator
         )
-        prompt_embeds = encode_prompt(args.validation_prompt, text_encoder, tokenizer)
-        latents_pred = generate(model, noise_scheduler, latents, prompt_embeds)
+        prompt_embeds, prompt_attention_masks = encode_prompt(args.validation_prompt, text_encoder, tokenizer)
+        latents_pred = generate(model, noise_scheduler, latents, prompt_embeds, prompt_attention_masks)
         images = vae.decode(latents_pred / vae.config.scaling_factor).sample
         images = (images / 2 + 0.5).clamp(0, 1)
 
