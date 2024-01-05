@@ -219,9 +219,13 @@ def setup_optimizer_scheduler(args, fake_model, student_model):
 
 def setup_dataloader(args):
     dataset = TextDataset(args.dm_data_path)
-    dm_dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.dm_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True)
+    dm_dataloader = torch.utils.data.DataLoader(
+        dataset, batch_size=args.dm_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True, shuffle=True
+    )
     dataset = RegressionDataset(args.reg_data_path)
-    reg_dataloader = torch.utils.data.DataLoader(dataset, batch_size=args.reg_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True)
+    reg_dataloader = torch.utils.data.DataLoader(
+        dataset, batch_size=args.reg_batch_size, num_workers=args.dataloader_num_workers, pin_memory=True, shuffle=True
+    )
     dm_dataloader = cycle(dm_dataloader)
     reg_dataloader = cycle(reg_dataloader)
     return dm_dataloader, reg_dataloader
@@ -297,8 +301,7 @@ def main(args):
             accelerator.load_state(os.path.join(args.output_dir, path))
             global_step = int(path.split("-")[1])
 
-    # lpips = piq.LPIPS()
-    lpips = nn.MSELoss()
+    lpips = piq.LPIPS()
     tracker = MetricTracker(50)
     if accelerator.is_main_process:
         log_validation(vae, student_model, text_encoder, tokenizer, noise_scheduler, args, accelerator, weight_dtype, global_step, logging_dir)

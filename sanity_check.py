@@ -40,7 +40,7 @@ def test_sd():
 def test_pixart():
     model_id = "PixArt-alpha/PixArt-XL-2-512x512"
     pipe = PixArtAlphaPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
-    # pipe.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd", torch_dtype=torch.float16)
+    pipe.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd", torch_dtype=torch.float16)
     pipe.to(device="cuda")
 
     with torch.no_grad():
