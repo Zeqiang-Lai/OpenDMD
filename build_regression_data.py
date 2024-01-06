@@ -10,8 +10,8 @@ import torch
 from diffusers import AutoPipelineForText2Image, DEISMultistepScheduler
 
 caption_path = "diffusion_db_prompts.txt"
-model_id = "PixArt-alpha/PixArt-XL-2-512x512"
-save_dir = "data/diffusion_db_pixart_xl_2_512x512"
+model_id = "runwayml/stable-diffusion-v1-5"
+save_dir = "data/diffusion_db_runwayml_stable-diffusion-v1-5"
 size = None
 
 
@@ -60,7 +60,7 @@ def run(device_id, job_id, worker_id, n_gpu, n_worker):
                 width,
                 dtype=torch.float16,
                 device=pipe.device,
-                generator=torch.Generator().manual_seed(123),
+                generator=torch.Generator().manual_seed(i),
             )
 
             image = pipe(prompt=prompt, latents=latents, num_inference_steps=num_inference_steps).images[0]
@@ -74,7 +74,7 @@ def run(device_id, job_id, worker_id, n_gpu, n_worker):
             image.save(os.path.join(save_dir, image_path))
             torch.save(latents, os.path.join(save_dir, latent_path))
 
-            f.write(json.dumps({"image_path": image_path, "latent_path": latent_path, "prompt": prompt}) + "\n")
+            f.write(json.dumps({"image_path": image_path, "latent_path": latent_path, "prompt": prompt, "seed": i}) + "\n")
             f.flush()
 
 
@@ -84,8 +84,8 @@ def parse_args():
     parser.add_argument("--workers", default=1, type=int, help="Number of workers spawned per GPU (default 1)")
     parser.add_argument("--size", default=None, type=int)
     parser.add_argument("--caption_path", default="diffusion_db_prompts.txt", type=str)
-    parser.add_argument("--model_id", default="lykon/dreamshaper-8", type=str)
-    parser.add_argument("--save_dir", default="data/diffusion_db_lykon_dreamshaper_8", type=str)
+    parser.add_argument("--model_id", default="runwayml/stable-diffusion-v1-5", type=str)
+    parser.add_argument("--save_dir", default="data/diffusion_db_runwayml_stable-diffusion-v1-5", type=str)
     args = parser.parse_args()
 
     global model_id, save_dir, caption_path, size
