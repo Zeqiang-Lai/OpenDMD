@@ -2,7 +2,7 @@
 
 MODEL_ID=PixArt-alpha/PixArt-XL-2-512x512
 DATA_PATH=data/diffusion_db_pixart_xl_2_512x512_2
-SAVE_PATH=saved/dmd_pixart_kl_only
+SAVE_PATH=saved/dmd_pixart
 
 accelerate launch train_dmd.py \
     --pretrained_teacher_model $MODEL_ID \
@@ -12,15 +12,15 @@ accelerate launch train_dmd.py \
     --vae_class tiny \
     --dm_data_path data/diffusion_db_prompts.txt \
     --reg_data_path $DATA_PATH \
-    --mixed_precision=fp16 \
-    --dm_batch_size=12 \
-    --reg_batch_size=6 \
+    --mixed_precision=no \
+    --dm_batch_size=5 \
+    --reg_batch_size=3 \
     --guidance_scale=4.5 \
     --max_train_steps=100000 \
     --validation_steps=10 \
-    --gradient_accumulation_steps=1 \
+    --gradient_accumulation_steps=4 \
     --kl_loss_weight=1.0 \
-    --reg_loss_weight=0.0 \
+    --reg_loss_weight=0.25 \
     --train_fake_model \
     --learning_rate=1e-6 \
     --gradient_checkpointing \
