@@ -9,13 +9,8 @@ import random
 import torch
 from diffusers import AutoPipelineForText2Image, DEISMultistepScheduler
 
-caption_path = "diffusion_db_prompts.txt"
-model_id = "runwayml/stable-diffusion-v1-5"
-save_dir = "data/diffusion_db_runwayml_stable-diffusion-v1-5"
-size = None
 
-
-def run(device_id, job_id, worker_id, n_gpu, n_worker):
+def run(device_id, job_id, worker_id, n_gpu, n_worker, caption_path, model_id, save_dir, size=None):
     global_id = device_id * n_worker + worker_id
     n_job = n_gpu * n_worker
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -23,7 +18,7 @@ def run(device_id, job_id, worker_id, n_gpu, n_worker):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(device_id)
     print(f"[{job_id}] Using device: {device_id} global_id {global_id}")
 
-    pipe = AutoPipelineForText2Image.from_pretrained(model_id, torch_dtype=torch.float16)
+    pipe = AutoPipelineForText2Image.from_pretrained(model_id, torch_dtype=torch.float16, local_files_only=True)
     pipe.safety_checker = None
     pipe.scheduler = DEISMultistepScheduler.from_config(pipe.scheduler.config)
     pipe = pipe.to(f"cuda")
@@ -87,13 +82,6 @@ def parse_args():
     parser.add_argument("--model_id", default="runwayml/stable-diffusion-v1-5", type=str)
     parser.add_argument("--save_dir", default="data/diffusion_db_runwayml_stable-diffusion-v1-5", type=str)
     args = parser.parse_args()
-
-    global model_id, save_dir, caption_path, size
-    model_id = args.model_id
-    save_dir = args.save_dir
-    caption_path = args.caption_path
-    size = args.size
-
     return args
 
 
@@ -122,12 +110,24 @@ def main():
 
     print("Using GPUs: ", visible_gpus)
 
+    kwargs = dict(
+        device_id=device_id,
+        job_id=job_id,
+        worker_id=i,
+        n_gpu=len(visible_gpus),
+        n_worker=num_workers,
+        caption_path=args.caption_path,
+        model_id=args.model_id,
+        save_dir=args.save_dir,
+        size=args.size,
+    )
+
     jobs = {}
     for device_id in visible_gpus:
         for i in range(num_workers):
             job_id = f"GPU{device_id:02d}-{i}"
             print(f"[{job_id}] Launching worker-process...")
-            p = mp.Process(target=run, kwargs=dict(device_id=device_id, job_id=job_id, worker_id=i, n_gpu=len(visible_gpus), n_worker=num_workers))
+            p = mp.Process(target=run, kwargs=kwargs)
             jobs[job_id] = (p, device_id)
             p.start()
 
@@ -140,14 +140,12 @@ def main():
                 else:
                     print(f"[{job_id}] Worker died, cleaning up...")
                     # remove remaining tar file
-                    os.system(f"rm -r -f -v {save_dir}/images/{job_id}")
-                    os.system(f"rm -r -f -v {save_dir}/latents/{job_id}")
-                    os.system(f"rm -f -v {save_dir}/meta_{job_id}.json")
-                    os.system(f"rm -f -v {save_dir}/meta_{job_id}.json")
+                    os.system(f"rm -r -f -v {args.save_dir}/images/{job_id}")
+                    os.system(f"rm -r -f -v {args.save_dir}/latents/{job_id}")
+                    os.system(f"rm -f -v {args.save_dir}/meta_{job_id}.json")
+                    os.system(f"rm -f -v {args.save_dir}/meta_{job_id}.json")
                     print(f"[{job_id}] respawning...")
-                    p = mp.Process(
-                        target=run, kwargs=dict(device_id=device_id, job_id=job_id, worker_id=i, n_gpu=len(visible_gpus), n_worker=num_workers)
-                    )
+                    p = mp.Process(target=run, kwargs=kwargs)
                     jobs[job_id] = (p, device_id)
                     p.start()
 
