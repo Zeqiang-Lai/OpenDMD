@@ -1,12 +1,12 @@
 # python -m torch.distributed.launch --use_env --nodes=1 --nproc_per_node=8 
 
-# MODEL_ID=runwayml/stable-diffusion-v1-5
-# DATA_PATH=data/diffusion_db_runwayml_stable-diffusion-v1-5
-# SAVE_PATH=saved/dmd_sd15
+MODEL_ID=runwayml/stable-diffusion-v1-5
+DATA_PATH=data/diffusion_db_runwayml_stable-diffusion-v1-5
+SAVE_PATH=saved/dmd_sd15
 
-MODEL_ID=lykon/dreamshaper-8
-DATA_PATH=data/diffusion_db_lykon_dreamshaper_8
-SAVE_PATH=saved/dmd_dreamshaper-8
+# MODEL_ID=lykon/dreamshaper-8
+# DATA_PATH=data/diffusion_db_lykon_dreamshaper_8
+# SAVE_PATH=saved/dmd_dreamshaper-8
 
 accelerate launch train_dmd.py \
     --pretrained_teacher_model $MODEL_ID  \
