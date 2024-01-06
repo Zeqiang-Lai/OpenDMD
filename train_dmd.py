@@ -504,19 +504,15 @@ def log_validation(vae, model, text_encoder, tokenizer, noise_scheduler, args, a
 
     image_dir = os.path.join(logging_dir, "images")
     os.makedirs(image_dir, exist_ok=True)
+    latents = prepare_latents(accelerator.unwrap_model(model), vae, batch_size=1, device=accelerator.device, dtype=weight_dtype, generator=generator)
+    prompt_embeds, prompt_attention_masks = encode_prompt(args.validation_prompt, text_encoder, tokenizer)
+    latents_pred = generate(model, noise_scheduler, latents, prompt_embeds, prompt_attention_masks)
+    images = vae.decode(latents_pred / vae.config.scaling_factor).sample
+    images = (images / 2 + 0.5).clamp(0, 1)
 
-    with torch.cuda.amp.autocast():
-        latents = prepare_latents(
-            accelerator.unwrap_model(model), vae, batch_size=1, device=accelerator.device, dtype=weight_dtype, generator=generator
-        )
-        prompt_embeds, prompt_attention_masks = encode_prompt(args.validation_prompt, text_encoder, tokenizer)
-        latents_pred = generate(model, noise_scheduler, latents, prompt_embeds, prompt_attention_masks)
-        images = vae.decode(latents_pred / vae.config.scaling_factor).sample
-        images = (images / 2 + 0.5).clamp(0, 1)
-
-        images = images[0].permute(1, 2, 0).detach().cpu().numpy()
-        images = (images * 255).astype("uint8")
-        Image.fromarray(images).save(os.path.join(image_dir, f"{step}_{args.validation_prompt}.jpg"))
+    images = images[0].permute(1, 2, 0).detach().cpu().numpy()
+    images = (images * 255).astype("uint8")
+    Image.fromarray(images).save(os.path.join(image_dir, f"{step}_{args.validation_prompt}.jpg"))
 
 
 if __name__ == "__main__":

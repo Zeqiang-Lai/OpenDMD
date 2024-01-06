@@ -38,34 +38,6 @@ def encode_prompt(captions, text_encoder, tokenizer):
     return prompt_embeds, attention_mask
 
 
-def generate_cfg(model, scheduler, latents, attention_mask, prompt_embeds, negative_prompt_embeds=None, num_inference_steps=1, guidance_scale=4.5):
-    scheduler.set_timesteps(num_inference_steps, device=model.device)
-    timesteps = scheduler.timesteps
-
-    if negative_prompt_embeds is not None:
-        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
-
-    for i, t in enumerate(timesteps):
-        # expand the latents if we are doing classifier free guidance
-        if negative_prompt_embeds is not None:
-            latent_model_input = torch.cat([latents] * 2)
-        else:
-            latent_model_input = latents
-
-        # predict the noise residual
-        noise_pred = forward_model(model, latents=latent_model_input, timestep=t, prompt_embeds=prompt_embeds, attention_mask=attention_mask)
-
-        # perform guidance
-        if negative_prompt_embeds is not None:
-            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
-            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
-
-        # compute the previous noisy sample x_t -> x_t-1
-        latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
-
-    return latents
-
-
 def isinstance_ddp(model, cls):
     model = extract_model_from_parallel(model)
     return isinstance(model, cls)
@@ -100,6 +72,51 @@ def forward_model(model, latents, timestep, prompt_embeds, prompt_attention_mask
             noise_pred = noise_pred.chunk(2, dim=1)[0]
 
     return noise_pred
+
+
+def generate_cfg(model, scheduler, latents, attention_mask, prompt_embeds, negative_prompt_embeds=None, num_inference_steps=1, guidance_scale=4.5):
+    scheduler.set_timesteps(num_inference_steps, device=model.device)
+    timesteps = scheduler.timesteps
+
+    if negative_prompt_embeds is not None:
+        prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0)
+
+    for i, t in enumerate(timesteps):
+        # expand the latents if we are doing classifier free guidance
+        if negative_prompt_embeds is not None:
+            latent_model_input = torch.cat([latents] * 2)
+        else:
+            latent_model_input = latents
+
+        # predict the noise residual
+        noise_pred = forward_model(model, latents=latent_model_input, timestep=t, prompt_embeds=prompt_embeds, attention_mask=attention_mask)
+
+        # perform guidance
+        if negative_prompt_embeds is not None:
+            noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+            noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
+
+        # compute the previous noisy sample x_t -> x_t-1
+        latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+
+    return latents
+
+
+def generate_ms(model, scheduler, latents, prompt_embeds, prompt_attention_masks, num_inference_steps=1):
+    scheduler.set_timesteps(num_inference_steps, device=model.device)
+    timesteps = scheduler.timesteps
+
+    for i, t in enumerate(timesteps):
+        noise_pred = forward_model(
+            model,
+            latents=latents,
+            timestep=t,
+            prompt_embeds=prompt_embeds,
+            prompt_attention_masks=prompt_attention_masks,
+        )
+        outputs = eps_to_mu(scheduler, noise_pred, latents, t)
+        latents = scheduler.step(noise_pred, t, latents, return_dict=False)[0]
+    return outputs
 
 
 def generate(model, scheduler, latents, prompt_embeds, prompt_attention_masks):
