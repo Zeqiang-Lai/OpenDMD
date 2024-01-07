@@ -38,9 +38,10 @@ def test_sd():
 
 
 def test_pixart():
+    weight_dtype = torch.float32
     model_id = "PixArt-alpha/PixArt-XL-2-512x512"
-    pipe = PixArtAlphaPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
-    pipe.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd", torch_dtype=torch.float16)
+    pipe = PixArtAlphaPipeline.from_pretrained(model_id, torch_dtype=weight_dtype)
+    pipe.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd", torch_dtype=weight_dtype)
     pipe.to(device="cuda")
 
     with torch.no_grad():
@@ -49,7 +50,7 @@ def test_pixart():
             pipe.vae,
             batch_size=1,
             device=torch.device("cuda"),
-            dtype=torch.float16,
+            dtype=weight_dtype,
             generator=torch.Generator().manual_seed(123),
         )
         prompt_embeds, attention_mask = encode_prompt(["a dog"], pipe.text_encoder, pipe.tokenizer)
@@ -70,11 +71,13 @@ def test_pixart():
 
 
 def ref_sd():
-    model_id = "runwayml/stable-diffusion-v1-5"
+    model_id = "lykon/dreamshaper-8"
     pipe = StableDiffusionPipeline.from_pretrained(model_id, torch_dtype=torch.float16)
     pipe.to(device="cuda")
     images = pipe(
         "a dog",
+        num_inference_steps=10,
+        guidance_scale=0,
         generator=torch.Generator().manual_seed(123),
     ).images
     images[0].save("output.jpg")
@@ -86,10 +89,8 @@ def ref_pixart():
     pipe.to(device="cuda")
     images = pipe(
         "a dog",
-        mask_feature=True,
-        clean_caption=False,
-        num_inference_steps=1,
-        guidance_scale=7.5,
+        num_inference_steps=10,
+        guidance_scale=0,
         generator=torch.Generator().manual_seed(123),
     ).images
     images[0].save("output.jpg")
