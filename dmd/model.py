@@ -119,7 +119,7 @@ def generate_ms(model, scheduler, latents, prompt_embeds, prompt_attention_masks
     return outputs
 
 
-def generate(model, scheduler, latents, prompt_embeds, prompt_attention_masks):
+def generate(model, scheduler, latents, prompt_embeds, prompt_attention_masks=None):
     t = torch.full((1,), scheduler.config.num_train_timesteps - 1, device=latents.device).long()
     noise_pred = forward_model(
         model,
