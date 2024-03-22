@@ -1,27 +1,35 @@
-# DMD-Unofficial
+# OpenDMD
 
-Unofficial Implementation of [One-step Diffusion with Distribution Matching Distillation](https://arxiv.org/abs/2311.18828)
+[![Hugging Face Models](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model-yellow)](https://huggingface.co/collections/aaronb/dmd-65f92b47c8f264ce4de3f043) [![Hugging Face Spaces](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Spaces-blue)](https://huggingface.co/spaces/aaronb/OpenDMD) 
+
+Open source implementation and models of One-step Diffusion with Distribution Matching Distillation
+
+
+| ![image (2)](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/eae4aaef-4da8-4437-b544-2293d164a4cb) | ![image1](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/5ae00440-6824-40c1-8132-d2b665c5844c) | ![image3](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/b7e8509b-96d5-4526-961c-bf38b53c70bc) |  ![image2](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/fe9c841a-9d17-49ae-a526-46ea5568b5e6) | 
+| --- | --- | --- | --- | 
 
 ## Usage
 
-- Build Regression Dataset
+Launch the gradio demo via:
 
-```bash
-python build_regression_data.py --gpus 0,1
-python build_regression_data.py --gpus "0,1" --model_id PixArt-alpha/PixArt-XL-2-512x512 --save_dir data/diffusion_db_pixart_xl_2_512x512
+```
+python gradio_dmd.py
 ```
 
-- Train 
+## Model Release
 
-```bash
-bash train.sh
-```
+These models are very experimental releases, all of them are only trained with very few steps, so the performance is not satisfactory.
 
-- Gradio demo
+| Model                            | Link                                                                       |
+| -------------------------------- | -------------------------------------------------------------------------- |
+| dreamshaper-8-dmd-1kstep         | [hf-model](https://huggingface.co/aaronb/dreamshaper-8-dmd-1kstep)         |
+| dreamshaper-8-dmd-kl-only-6kstep | [hf-model](https://huggingface.co/aaronb/dreamshaper-8-dmd-kl-only-6kstep) |
 
-```bash
-python gradio_dmd.py --model_path lykon/dreamshaper-8 --unet_path saved/dmd/checkpoint-1000/student_unet
-```
+## Real Time Demo
+
+The video is not accelerated.
+
+https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/f8069208-934d-49a2-839e-689c2e1a85fe
 
 ## Citation
 
