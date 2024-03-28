@@ -23,6 +23,8 @@ python gradio_dmd.py
 
 These models are very experimental releases, all of them are only trained with very few steps, so the performance is not satisfactory.
 
+If you are trying to reproduce the results, we recommend first testing original sd1.5 (which is fully verified), there might be some issues for fintuned model.
+
 | Model                            | Link                                                                       |
 | -------------------------------- | -------------------------------------------------------------------------- |
 | dreamshaper-8-dmd-1kstep         | [hf-model](https://huggingface.co/aaronb/dreamshaper-8-dmd-1kstep)         |
