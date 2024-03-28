@@ -5,7 +5,10 @@
 Open source implementation and models of One-step Diffusion with Distribution Matching Distillation
 
 
-| ![image (2)](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/eae4aaef-4da8-4437-b544-2293d164a4cb) | ![image1](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/5ae00440-6824-40c1-8132-d2b665c5844c) | ![image3](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/b7e8509b-96d5-4526-961c-bf38b53c70bc) |  ![image2](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/fe9c841a-9d17-49ae-a526-46ea5568b5e6) | 
+
+
+
+| ![image (2)](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/41b7c333-619a-48ed-baf8-45687516d53a) | ![image1](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/0e092092-1835-4314-aaa3-c5f6ba50edbe) | ![image3](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/80b86719-b647-4477-9e1c-d1b9ad14d9f3) | ![image2](https://github.com/Zeqiang-Lai/OpenDMD/assets/26198430/eb922a2f-dbd4-4607-92a7-a2eee8f1be4b) | 
 | --- | --- | --- | --- | 
 
 ## Usage
