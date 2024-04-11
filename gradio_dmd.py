@@ -8,8 +8,8 @@ from diffusers import DiffusionPipeline, UNet2DConditionModel
 from dmd.scheduling_dmd import DMDScheduler
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--unet_path", type=str)
-parser.add_argument("--model_path", type=str)
+parser.add_argument("--unet-path", type='Lykon/dreamshaper-8')
+parser.add_argument("--model-path", type='aaronb/dreamshaper-8-dmd-1kstep')
 args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
