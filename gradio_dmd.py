@@ -14,7 +14,7 @@ args = parser.parse_args()
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-unet = UNet2DConditionModel.from_pretrained(args.unet_path)
+unet = UNet2DConditionModel.from_pretrained(args.unet_path, subfolder='unet')
 pipe = DiffusionPipeline.from_pretrained(args.model_path, unet=unet)
 pipe.scheduler = DMDScheduler.from_config(pipe.scheduler.config)
 pipe.to(device=device, dtype=torch.float16)
